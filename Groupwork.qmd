@@ -1,0 +1,1225 @@
+---
+title: Data Analytics for Banking Coursework
+author:
+  - name: Pietro Rota
+    affiliation:
+      - name: Bayes Business School – City, St George’s University of London
+        city: London
+        state: UK
+        url: https://www.bayes.citystgeorges.ac.uk/
+jupyter: python3
+format:
+  html:
+    toc: true
+    code-tools: true
+    code-fold: true
+    code-summary: Show code
+    fig-dpi: 500
+    fig.path: figures/
+    self-contained: true
+    fig.format: png
+    df-print: kable
+    code-block-border-left: royalblue
+    code-block-bg: true
+    font-family: system-ui
+    html-table-processing: none
+    html-math-method: katex
+execute:
+  echo: true
+  output: true
+  warning: false
+  message: false
+---
+
+**TO RENDER CORRECTLY**:
+
+quarto preview "c:/Users/pietr/OneDrive - City St George's, University of London/Documents/a2025-2026 BAYES/DABF - Data Analytics for Banking & Finance/DABF_code/Groupwork/Groupwork.ipynb" --to html --execute
+
+# Introduction
+
+This analysis examines the performance of major companies in the energy sector over the past year, especially looking at the renewable energy segment. This year has been characterised by heightened volatility and structural changes driven largely by geopolitical tensions, inflationary pressures, and shifts in global interest rates. Notably, traditional energy commodities, such as oil and natural gas, have underperformed compared to the previous three years. This reflects a confluence of softer demand and accelerating momentum behind the global transition toward cleaner energy sources.
+
+```{python}
+#| label: setup
+from scipy.stats import jarque_bera
+from statsmodels.tsa.stattools import adfuller
+from datetime import datetime
+from statsmodels.api import OLS, add_constant
+from great_tables import GT
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+print("Current Time:", datetime.now())
+```
+
+# Data Collection
+
+All the Financial information was retrieved from the Bloomberg terminal using the BQL tool for easier date alignment, as these companies are listed on different stock exchanges, they observe different holidays. BQL also allows for currency conversion to British Pounds. The 10 companies that have been chosen are:
+
+| Company name | Bloomberg ticker | Col3 | BICS sector 4 | Transition Readiness |
+|---------------|---------------|---------------|---------------|---------------|
+| Chevron Corp | CVX US Equity | New York | Integrated Oils | Unprepared |
+| First Solar Inc | FSLR US Equity | NASDAQ GS | Renewable Energy Equipment | Aligned |
+| Eni SPA | ENI IM Equity | Borsa Italiana | Integrated Oils | Developing |
+| Exxon Mobil Corp | XOM US Equity | New York | Integrated Oils | Unprepared |
+| Shell PLC | SHEL LN Equity | London | Integrated Oils | Unprepared |
+| Vestas Wind Systems A/S | VWS DC Equity | Copenhagen | Renewable Energy Equipment | Aligned |
+| Equinor ASA | TTE FP Equity | Oslo | Integrated Oils | Developing |
+| TotalEnergies SE | EQNR NO Equity | EN Paris | Integrated Oils | Developing |
+| Ameresco Inc | AMRC US Equity | New York | Renewable Energy Project | Aligned |
+| NextEra Energy Inc | NEE US Equity | New York | Integrated Electric Utilities | Developing |
+
+: Table 1: Companies Table with Bloomberg Industry Classification Standard and Transition Readiness
+
+```{python}
+def basic_plot(data, NAME):
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Plot all columns (companies) against the index (quarters)
+    # This is much simpler than the bar chart, as Matplotlib handles the
+    # X-axis scaling automatically for line plots on an index.
+    data.plot(kind='line', ax=ax)
+
+    # --- 3. CUSTOMIZING THE CHART ---
+
+    # Add titles and labels
+    ax.set_xlabel("Quarter", fontsize=12)
+    ax.set_ylabel(NAME.upper(), fontsize=12)
+    ax.set_title(f"{NAME.capitalize()} Trend of 10 Companies Across 4 Quarters",
+        fontsize=14,
+        fontweight='bold'
+    )
+
+    # Customize the legend: place it outside the plot area
+    ax.legend(
+        title="Companies",
+        bbox_to_anchor=(1.05, 0.5),
+        loc='center left',
+        borderaxespad=0,
+        frameon=False
+    )
+
+    # Ensure only the quarter labels are shown on the X-axis
+    ax.set_xticks(range(4))
+    ax.set_xticklabels(quarters)
+
+    # Add a grid for better readability
+    ax.grid(axis='both', linestyle='-', alpha=0.6)
+
+    # Display the plot
+    plt.tight_layout()
+    plt.show()
+def clustered_bar_chart(df, name):
+    quarters = ["Q4 2024", "Q1 2025", "Q2 2025", "Q3 2025"]
+    plot_df = df.transpose().iloc[-10:]
+    plot_df.columns = quarters
+    companies = plot_df.index.tolist()
+
+    x = np.arange(len(quarters))  # 4 quarter positions
+    width = 0.09                  # small width because 10 companies inside each cluster
+
+    plt.figure(figsize=(14, 7))
+
+    for i, company in enumerate(companies):
+        plt.bar(
+            x + i*width,                         # shift inside each quarter cluster
+            plot_df.loc[company, quarters],           # values for that company
+            width,
+            label=company,     # show legend only once
+        )
+
+    # Fix x-axis tick positions (center the cluster labels)
+    plt.xticks(x + width*len(companies)/2, quarters)
+
+    plt.xlabel("Quarter")
+    plt.ylabel("Value")
+    plt.title(f"Clustered Bar Chart of {name} by Quarter")
+    plt.legend(title="Company", loc='center left',bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False)
+    plt.tight_layout()
+    plt.show()
+
+def Quick_scatter(Data1, Data2, label1, label2, ylog=False, xlog=False, panelreg = False, groupreg = True):
+        # Collect all data for panel regression
+    all_data1 = []
+    all_data2 = []
+    plt.figure(figsize=(12, 6))
+    
+    if groupreg:
+    # ---- classify companies ----
+        green_status = {
+            "CVX US Equity": "no",
+            "FSLR US Equity": "yes",
+            "ENI IM Equity": "some",
+            "XOM US Equity": "no",
+            "SHEL LN Equity": "no",
+            "VWS DC Equity": "yes",
+            "EQNR NO Equity": "some",
+            "TTE FP Equity": "some",
+            "AMRC US Equity": "yes",
+            "NEE US Equity": "yes"
+        }
+
+
+        # If you want: define green = yes only
+        green_companies = [c for c,s in green_status.items() if s == "yes"]
+        non_green_companies = [c for c,s in green_status.items() if s == "no"]
+        some_companies = [c for c,s in green_status.items() if s == "some"]  # optional
+
+
+        # Also prepare lists for green/non-green group regressions
+        green_x = []
+        green_y = []
+        nongreen_x = []
+        nongreen_y = []
+        some_x = []
+        some_y = []
+
+    # --- Plot scatter + company-level regressions ---
+    for company in company_columns:
+        Data1_series = Data1[company]
+        Data2_series = Data2[company]
+
+        all_data1.append(Data1_series)
+        all_data2.append(Data2_series)
+        if groupreg:
+            # Add to correct group
+            if company in green_companies:
+                green_x.append(Data1_series)
+                green_y.append(Data2_series)
+            elif company in non_green_companies:
+                nongreen_x.append(Data1_series)
+                nongreen_y.append(Data2_series)
+            elif company in some_companies:
+                some_x.append(Data1_series)
+                some_y.append(Data2_series)
+
+        # Company scatter
+        plt.scatter(Data1_series, Data2_series, label=company)
+
+        # Company individual regression
+        # sns.regplot(
+        #     x=Data1_series.values,
+        #     y=Data2_series.values,
+        #     scatter=False,
+        #     ci=None,
+        #     line_kws={'alpha': 0.6, 'linewidth': 1}
+        # )
+
+    # --- Convert group lists ---
+    if groupreg:
+        gx = pd.concat(green_x).values if green_x else None
+        gy = pd.concat(green_y).values if green_y else None
+        nx = pd.concat(nongreen_x).values if nongreen_x else None
+        ny = pd.concat(nongreen_y).values if nongreen_y else None
+        sx = pd.concat(some_x).values if some_x else None
+        sy = pd.concat(some_y).values if some_y else None
+
+    if panelreg:
+        # --- Panel-wide regression ---
+        all_x = pd.concat(all_data1).values
+        all_y = pd.concat(all_data2).values
+        sns.regplot(
+            x=all_x, y=all_y,
+            scatter=False, ci=None,
+            label='Panel-Wide Regression',
+            line_kws={'color': 'blue', 'linewidth': 4, 'alpha': 0.2}
+        )
+
+    if groupreg:
+        # --- Group Regressions ---
+        if gx is not None:
+            sns.regplot(
+                x=gx, y=gy,
+                scatter=False, ci=None,
+                label='Aligned Companies',
+                line_kws={'color': 'green', 'linewidth': 5, 'alpha': 0.2}
+            )
+
+        if nx is not None:
+            sns.regplot(
+                x=nx, y=ny,
+                scatter=False, ci=None,
+                label='Unprepared Companies',
+                line_kws={'color': 'red', 'linewidth': 5, 'alpha': 0.2}
+            )
+
+        if sx is not None:
+            sns.regplot(
+                x=sx, y=sy,
+                scatter=False, ci=None,
+                label='Developing Companies',
+                line_kws={'color': 'gray', 'linewidth': 5, 'alpha': 0.2}
+        )
+
+    # --- Formatting ---
+    if xlog:
+        plt.xscale('log')
+    if ylog:
+        plt.yscale('log')
+
+    plt.title(f'{label1} vs. {label2} (with group regressions)', fontsize=14)
+    plt.xlabel(label1)
+    plt.ylabel(label2)
+    plt.grid(True, ls="--", alpha=0.6)
+    plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
+    plt.tight_layout()
+
+def percentage_stacked_bar_chart(df, name):
+    quarters = ["Q4 2024", "Q1 2025", "Q2 2025", "Q3 2025"]
+    plot_df = df.transpose().iloc[-10:]
+    plot_df.columns = quarters
+    companies = plot_df.index.tolist()
+
+    # Convert to numeric
+    plot_df = plot_df.apply(pd.to_numeric, errors="coerce")
+
+    # Normalize so each column sums to 100
+
+    df_pct = plot_df[quarters].div(plot_df[quarters].sum(axis=0), axis=1) * 100
+
+    x = np.arange(len(quarters))
+
+    plt.figure(figsize=(14,7))
+
+    bottom = np.zeros(len(quarters))
+
+    for company in companies:
+        values = df_pct.loc[company, quarters].values.astype(float)
+
+        plt.bar(
+            x,
+            values,
+            bottom=bottom,
+            label=company
+        )
+        bottom += values
+
+    plt.xticks(x, quarters)
+    plt.xlabel("Quarter")
+    plt.ylabel("Percentage Share (%)")
+    plt.title(f"Percentage Stacked Bar Chart of {name}")
+    plt.legend(title="Company", loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False)
+
+    plt.ylim(0, 100)
+    plt.tight_layout()
+    plt.show()
+
+def simple_bar_chart(data, title, ylabel = "Company"):
+
+    colors = {
+    'CVX US Equity': '#1f77b4',
+    'FSLR US Equity': '#ff7f0e',
+    'ENI IM Equity': '#2ca02c',
+    'XOM US Equity': '#d62728',
+    'SHEL LN Equity': '#9467bd',
+    'VWS DC Equity': '#8c564b',
+    'EQNR NO Equity': '#e377c2',
+    'TTE FP Equity': '#7f7f7f',
+    'AMRC US Equity': '#bcbd22',
+    'NEE US Equity': '#17becf'
+    }
+
+    plot_data = data.iloc[0, 1:].sort_values(ascending=False)
+    bar_colors = [colors[ticker] for ticker in plot_data.index]
+
+    plt.figure(figsize=(10, 6))
+    plot_data.plot(kind='barh', color=bar_colors, width=0.9)
+    plt.xlabel(title, fontsize=12, fontweight='bold')
+    plt.ylabel(ylabel, fontsize=12, fontweight='bold')
+    plt.title(f"{title} Analysis", fontsize=14)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+```
+
+```{python}
+#| label: import_prices
+from pathlib import Path
+PATH = Path("C:/Users/pietr/OneDrive - City St George's, University of London/Documents/a2025-2026 BAYES/DABF - Data Analytics for Banking & Finance/DABF_code/Groupwork/Data-Analytics-For-Banking/DF.xlsx")
+
+df = pd.read_excel(PATH, sheet_name="PRICES GBP")
+# df['Date'] = pd.to_datetime(df['Date'], unit='D')
+df.set_index('Date', inplace=True)
+df = df.astype(float)
+df2 = df.drop("SPX Index", axis=1)
+# Inspect the data
+
+#| label: import_fundamentals
+MKT = pd.read_excel(PATH, sheet_name = "MKTCAP")
+PE = pd.read_excel(PATH, sheet_name = "PE")
+EPS = pd.read_excel(PATH, sheet_name = "EPS")
+ROA = pd.read_excel(PATH, sheet_name = "ROA")
+ROE = pd.read_excel(PATH, sheet_name = "ROE")
+ESG = pd.read_excel(PATH, sheet_name = "ESG")
+
+quarters = PE["Date"]
+company_columns = PE.columns[1:]
+
+df = df.dropna()
+df.round(4)
+```
+
+They were selected to provide a general market overview rather than focusing on a specific jurisdiction. The primary objective is to analyse variations in their business models. 
+The selection includes varied business models: companies that are leading the climate transition like Ameresco, First Solar, and Vestas. Ameresco focuses on integrated clean energy solutions, including cogeneration and hydroelectric systems, First Solar dealing in solar panels, and Vestas creating offshore wind turbines. Then there are companies that are in the middle, such as Eni, Equinor, NextEra, and TotalEnergies, which still largely deal in hydrocarbons, but also articulated transition strategies and plans to at some point switch off their involvement in oil and gas even before the 2050 zero carbon target. Then there are companies like Shell, Chevron and Exxon that have no renewable aims and no intentions to develop them, have opted to focus on exploration, refinement, and sale of hydrocarbons. 
+
+# Methodology
+
+To analyse the companies in a comparable way, we took the daily returns:
+
+$$
+\text{R}_i=\frac{P_{t;i}-P_{t-1;i}}{P_{t-1;i}} 
+$$
+
+Where $P_t$ is the price today, and $P_{t-1}$ what was the price yesterday.
+Before this, we dropped all days where any market was closed, totalling 129 lost days for a total of 237 days where we have price data for all firms. Opting to reduce the number of days is the simplest way to make sure that all the data is aligned and there are no empty cells. 
+
+
+```{python}
+#| label: returns
+returns = (df / df.shift(1)-1)
+returns = returns.dropna()
+
+SPXreturns = returns["SPX Index"]
+
+full_returns = returns
+returns = returns.iloc[:, :-1] # Exclude SPX for initial analysis
+```
+
+```{python}
+#| label: IQR
+low = 25
+high = 100 - low
+q1 = df2.quantile(low/100)
+q3 = df2.quantile(high/100)
+iqr = q3 - q1
+
+iqr_df = pd.DataFrame({"Names":df2.columns,"Q1": q1, "Q3": q3, "IQR": iqr}).round(4)
+iqr_df_sorted = iqr_df.sort_values("IQR", ascending=False)
+
+display(
+    GT(iqr_df_sorted)
+    .tab_header(title="Per-asset IQR of Prices")
+    .opt_stylize(5, color = "gray")
+)
+
+# Overall IQR across all prices (flattened, excluding NaNs)
+all_vals = df2.values.flatten()
+all_vals = all_vals[~np.isnan(all_vals)]
+overall_q1 = np.percentile(all_vals, low)
+overall_q3 = np.percentile(all_vals, high)
+overall_iqr = overall_q3 - overall_q1
+
+print(f"\nOverall IQR across all prices: {overall_iqr:.4f} (Q1={overall_q1:.4f}, Q3={overall_q3:.4f})")
+```
+
+```{python}
+#| label: abs_change
+last_prices = df.iloc[-1]
+first_prices = df.iloc[0]
+
+(
+    GT(pd.DataFrame({"Names":df.columns,"First prices":first_prices, "Last prices":last_prices,"Change":(last_prices-first_prices)}).sort_values(by="Change", ascending=False))
+    .tab_header(title="Price Change over the period")
+    .opt_stylize(5, color = "gray")
+    .fmt(lambda x: f"{x:.2f}£", columns=["First prices", "Last prices", "Change"])
+)
+```
+
+```{python}
+#| label: total_return
+(
+    GT(pd.DataFrame({"Names":returns.columns, "Sum":returns.sum()}).sort_values(by="Sum", ascending=False))
+    .tab_header(title="Sum of Daily Returns")
+    .opt_stylize(5, color = "gray")
+    .fmt(lambda x: f"{x:.2f}", columns=["Sum"])
+)
+```
+
+days with the highest returns
+
+```{python}
+#| label: Largest Daily Move
+DAYS = pd.DataFrame({"Name":returns.columns, "Negative":returns.idxmin(axis=0), "Positive":returns.idxmax(axis=0), 
+#"Difference": returns.idxmax(axis=0)-returns.idxmin(axis=0)
+})
+
+(
+    GT(DAYS)
+    .tab_header(title="Date of Largest Daily Move")
+    .opt_stylize(5, color = "gray")
+)
+```
+
+## Descriptive Statistics
+This table showcases much of the descriptive statistics analysis. Overall, the returns were very low this year, with TotalEnergies going in the negative, renewables showing good daily returns, while the others maintained slim positive averages.
+Standard deviation varied significantly, with the least risky stock, Eni, having a standard deviation of 1.29% and the most volatile, Ameresco, reaching 6.25%.
+Coefficient of variation CV=(Standard deviation)/(mean ) serves as a measure of risk-per-unit-of-return. With low means, it becomes harder to interpret; only Eni had a CV under 20, which is the threshold for performing stocks. Ameresco had the strongest mean return coupled with the highest daily volatility, as it is common for the growth renewable plays often look like this. And of note, also Chevron had a lower mean, but also lower volatility.
+Skewness is varied, ranging from negative, indicating a frequent number of small gains and a few extreme losses, to positive, indicating the potential for larger upside outliers. Renewables showed big upside tails, which are common for high-growth stocks, while all other companies show a negative skewness, meaning that they fall sharply on bad days, rise slowly on good days.
+Kurtosis shows how much the tails contribute to the total distribution compared to the normal distribution, which signifies the likelihood of extreme outliers. Ameresco with the highest amount, showing a higher probability of extreme returns; the rest of the renewable stocks showed increased probability of extreme returns.
+Beta (β) systematic risk is derived by using a reference index like the S&P 500, serving as a proxy for the overall economy. Ameresco was the only company with a defensive beta, indicating volatility on par with the index. Other companies showed a beta lower than 1, which indicates greater stability under changing market conditions. Vestas and Equinor had a negative beta, which represents a negative correlation with the index.
+The 5% daily Gaussian VaR ranges from -2.04% Eni to -10% Ameresco. The 1% VaR confirms substantial downside risk in the volatile renewable energy stocks. However, these estimates are likely biased because the normality assumption is clearly violated for assets with such high kurtosis.
+
+```{python}
+#| label: desc_stats
+#| column: screen
+from scipy.stats import norm
+ 
+desc_stats = pd.DataFrame({
+    "Count": returns.count(),
+    "Mean": returns.mean(),
+    "Std": returns.std(),
+    "CV": returns.std()/returns.mean(),
+    "Skewness": returns.skew(),
+    "Kurtosis": returns.kurt()
+})
+
+
+index_returns = np.array(SPXreturns)
+OLS_returns = returns.reset_index()
+
+betas = {}
+for ticker in OLS_returns.columns[1:]:
+    y = OLS_returns[ticker]
+    X = np.array(add_constant(index_returns))
+    model = OLS(y, X).fit()
+    betas[ticker] = model.params[1]  # beta coefficient
+beta_df = pd.DataFrame.from_dict(betas, orient='index', columns=['Beta'])
+
+ADF_test = {}
+ADF_pval = {}
+for ticker in OLS_returns.columns[1:]:
+    model = adfuller(OLS_returns[ticker])
+    ADF_test[ticker] = model[0]  # ADF coefficient
+    ADF_pval[ticker] = model[1]  # pval 
+ADF_test_df = pd.DataFrame.from_dict(ADF_test, orient='index')
+ADF_pval_df = pd.DataFrame.from_dict(ADF_pval, orient='index')
+
+JB_test = {}
+JB_pval = {}
+for ticker in OLS_returns.columns[1:]:
+    model = jarque_bera(OLS_returns[ticker])
+    JB_test[ticker] = model[0]  # ADF coefficient
+    JB_pval[ticker] = model[1]  # pval 
+JB_test_df = pd.DataFrame.from_dict(JB_test, orient='index')
+JB_pval_df = pd.DataFrame.from_dict(JB_pval, orient='index')
+
+
+# VAR 5%
+VAR5 = {}
+VAR1 = {}
+for ticker in OLS_returns.columns[1:]:
+    VAR5[ticker] = norm.ppf(0.05, loc=desc_stats["Mean"][ticker], scale=desc_stats["Std"][ticker])
+    VAR1[ticker] = norm.ppf(0.01, loc=desc_stats["Mean"][ticker], scale=desc_stats["Std"][ticker])
+VAR5_df = pd.DataFrame.from_dict(VAR5, orient='index')
+VAR1_df = pd.DataFrame.from_dict(VAR1, orient='index')
+
+desc_stats['CV'] = desc_stats["Std"]/desc_stats["Mean"]
+desc_stats['Beta'] = beta_df
+# desc_stats['ADF test'] = ADF_test_df 
+# desc_stats['ADF p-value'] = ADF_pval_df
+# desc_stats['JB test'] = JB_test_df
+# desc_stats['JB p-value'] = JB_pval_df
+desc_stats['VAR 5%'] = VAR5_df
+desc_stats['VAR 1%'] = VAR1_df
+
+# desc_stats = desc_stats.round(5)
+desc_stats['Name'] = returns.columns
+# cols_to_select = desc_stats.columns.drop("Name")
+(
+    GT(desc_stats).cols_move_to_start(columns="Name")
+    .tab_header(title="Descriptive Statistics for selected companies", 
+    #    subtitle="S&P 500 used as refernence index"
+    )
+    .opt_stylize(5, color = "gray")
+    .fmt(lambda x: f"{x:.2e}", columns=["Mean", "Std", 
+    # "ADF p-value", "JB p-value"
+    ])
+    .fmt(lambda x: f"{x:.4f}", columns=["Skewness","Kurtosis", "CV", "Beta", 
+    # "ADF test"
+    ])
+    .fmt(lambda x: f"{x:.4%}", columns=['VAR 5%', 'VAR 1%'])
+    .fmt_integer(columns = "Count")
+
+
+    # .fmt(lambda x: f"{x:.2f}", columns=["JB test"])
+
+)
+```
+
+```{python}
+low  = 1
+mid  = 2
+high = 3
+avgstd = np.mean(desc_stats["Std"])
+#| label: cumulative_performance
+plt.figure(figsize=(14, 6))
+for company in returns.columns:
+    plt.plot(returns[company])
+plt.legend(labels=returns.columns,loc='center left', bbox_to_anchor=(1.02, 0.5), 
+    ncol=1,frameon=False)
+plt.title("Daily discrete returns of companies last year", fontsize=16)
+plt.xlabel("Date", fontsize=16)
+# plt.axhline(low*avgstd, color='red', linestyle='--', label='Market Beta = 1')
+# plt.axhline(mid*avgstd, color='red', linestyle='--', label='Market Beta = 1')
+# plt.axhline(high*avgstd, color='red', linestyle='--', label='Market Beta = 1')
+# plt.axhline(-low*avgstd, color='red', linestyle='--', label='Market Beta = 1')
+# plt.axhline(-mid*avgstd, color='red', linestyle='--', label='Market Beta = 1')
+# plt.axhline(-high*avgstd, color='red', linestyle='--', label='Market Beta = 1')
+plt.ylabel("Discrete returns", fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.xticks(fontsize=14)  # shrink labels
+plt.yticks(fontsize=14)  # shrink labels
+
+plt.tight_layout()                 # makes space for title/axes
+plt.subplots_adjust(right=0.8)     # extra: leaves space for legend
+plt.show()
+```
+
+This chart allows us to spot outlier days. Ameresco had a big drop in price following an earnings call but then recovered with positive earnings later in the year (Omotosho 2025). First solar, First Solar also experienced a price spike in August following a US government announcement regarding tax credit for clean energy projects (Bohen 2025).
+
+```{python}
+#| label: cumulative_performance
+plt.figure(figsize=(14, 6))
+for company in returns.columns:
+    plt.plot((np.cumsum(returns[company])))
+plt.legend(labels=returns.columns,loc='center left', bbox_to_anchor=(1.02, 0.5), 
+    ncol=1,frameon=False)
+plt.title("Cumulative Performance of discrete returns", fontsize=16)
+plt.xlabel("Date", fontsize=16)
+plt.ylabel("Cumulative returns", fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.xticks(fontsize=14)  # shrink labels
+plt.yticks(fontsize=14)  # shrink labels
+
+plt.tight_layout()                 # makes space for title/axes
+plt.subplots_adjust(right=0.8)     # extra: leaves space for legend
+plt.show()
+```
+
+
+```{python}
+plt.figure(figsize=(14, 6))
+for company in df2.columns:
+    plt.plot(df2[company])
+plt.legend(labels=df2.columns,loc='center left', bbox_to_anchor=(1.02, 0.5), 
+    ncol=1,frameon=False)
+plt.title("Cumulative Performance of discrete returns", fontsize=16)
+plt.xlabel("Date", fontsize=16)
+plt.ylabel("Cumulative returns", fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.xticks(fontsize=14)  # shrink labels
+plt.yticks(fontsize=14)  # shrink labels
+
+plt.tight_layout()                 # makes space for title/axes
+plt.subplots_adjust(right=0.8)     # extra: leaves space for legend
+plt.show()
+
+print("Day with the lowest returns")
+returns.idxmin(axis=0).sort_values()
+
+```
+
+This chart allows us to spot outlier days. Ameresco had a big drop in price following an earnings call but then recovered with positive earnings later in the year (Omotosho 2025). First solar, First Solar also experienced a price spike in August following a US government announcement regarding tax credit for clean energy projects (Bohen 2025).
+
+```{python}
+cum_perf = (1 + returns).cumprod() - 1 +100
+
+plt.figure(figsize=(14, 6))
+
+for company in cum_perf.columns:
+    plt.plot(cum_perf.index, cum_perf[company], label=company)
+
+plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.5),
+           ncol=1, frameon=False)
+plt.title("Cumulative Performance of Stocks", fontsize=16)
+plt.xlabel("Date", fontsize=16)
+plt.ylabel("Cumulative Return", fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+
+plt.tight_layout()
+plt.subplots_adjust(right=0.8)
+plt.show()
+```
+
+This cumulative performance chart shows how all stocks performed starting from 100. Here, it is possible to see that stocks like, Chevron, Eni, Exxon, Shell, and TotalEnergies were hurt by the tariffs in April 2025. This was due to the implied increase in price for oil coming from overseas, which all these companies deal in, when tariffs raise fears of weaker global growth and reduced oil demand (International Energy Agency 2025). The renewables did not feel the same effects, proving their resilience to these kinds of geopolitical events.
+
+```{python}
+#| label: cumulative_returns_ESG_groups
+MKTL = MKT.iloc[3:,:]
+MKTL[['CVX US Equity', 'XOM US Equity', 'SHEL LN Equity']]
+# Compute group weights
+GREEN_weights = MKTL[['VWS DC Equity', 'FSLR US Equity', 'AMRC US Equity']].div(
+    MKTL[['VWS DC Equity', 'FSLR US Equity', 'AMRC US Equity']].sum(axis=1), axis=0
+).iloc[0] 
+
+TRANSITIONAL_weights = MKTL[['ENI IM Equity', 'TTE FP Equity', 'EQNR NO Equity', 'NEE US Equity']].div(
+    MKTL[['ENI IM Equity', 'TTE FP Equity', 'EQNR NO Equity', 'NEE US Equity']].sum(axis=1), axis=0
+).iloc[0] 
+
+BROWN_weights = MKTL[['CVX US Equity', 'XOM US Equity', 'SHEL LN Equity']].div(
+    MKTL[['CVX US Equity', 'XOM US Equity', 'SHEL LN Equity']].sum(axis=1), axis=0
+).iloc[0] 
+
+
+GREEN_ret = (returns[['VWS DC Equity', 'FSLR US Equity', 'AMRC US Equity']] * GREEN_weights).sum(axis=1)
+TRANSITIONAL_ret = (returns[['ENI IM Equity', 'TTE FP Equity', 'EQNR NO Equity', 'NEE US Equity']] * TRANSITIONAL_weights).sum(axis=1)
+BROWN_ret = (returns[['CVX US Equity', 'XOM US Equity', 'SHEL LN Equity']] * BROWN_weights).sum(axis=1)
+
+
+cum_GREEN_ret = 100 * (1 + GREEN_ret).cumprod()
+cum_TRANSITIONAL_ret = 100 * (1 + TRANSITIONAL_ret).cumprod()
+cum_BROWN_ret = 100 * (1 + BROWN_ret).cumprod()
+
+plt.figure(figsize=(12, 6))
+plt.plot(cum_GREEN_ret, label='Aligned Companies', color='green')
+plt.plot(cum_TRANSITIONAL_ret, label='Developing Companies', color='gray')
+plt.plot(cum_BROWN_ret, label='Unprepared Companies', color='brown')
+
+plt.grid(axis='both', linestyle='-', alpha=0.6)
+plt.legend(title="Company", loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False)
+plt.title("Market-Cap Weighted Cumulative Returns by ESG Category", fontsize=16)
+plt.tight_layout()
+plt.show()
+
+GREEN = returns[['VWS DC Equity', 'FSLR US Equity', "AMRC US Equity"]].sum(axis=1) 
+TRANSITIONAL = returns[['ENI IM Equity', 'TTE FP Equity', "EQNR NO Equity", "NEE US Equity"]].sum(axis=1) 
+BROWN = returns[['CVX US Equity', 'XOM US Equity', "SHEL LN Equity"]].sum(axis=1) 
+
+cum_GREEN_ret = 100 * (1 + GREEN).cumprod()
+cum_TRANSITIONAL_ret = 100 * (1 + TRANSITIONAL).cumprod()
+cum_BROWN_ret = 100 * (1 + BROWN).cumprod()
+
+
+plt.figure(figsize=(12, 6)) 
+plt.plot(cum_GREEN_ret, label='Aligned Companies', color='green') 
+plt.plot(cum_TRANSITIONAL_ret, label='Developing Companies', color='gray') 
+plt.plot(cum_BROWN_ret, label='Unprepared Companies', color='brown') 
+plt.grid(axis='both', linestyle='-', alpha=0.6) 
+plt.legend(title="Company", loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1, frameon=False) 
+plt.title("Cumulative Returns by ESG Category Equally weighted", fontsize=16)
+```
+
+Just to get a final look at how these companies performed in the market this chart, this is a market cap weighted return chart where each daily return is multiplied by their market share among companies of the same climate readiness. The formula ends up being:
+$$ 
+w_{i,j}=\frac{m_{i,j}}{∑_{k∈j} m_{k,j}} 
+$$
+
+where i is the individual asset and j is the transition readiness and k means all assets i that belong to group j. With this, it is easy to see that although the climate-aligned companies collectively did not outperform the other two groups for most of the year, and in fact experienced a big drawdown for half of the year, they picked up pace and are now clear above the rest. 
+
+
+```{python}
+#| label: violin_boxplot_enhanced
+import ptitprince as pt
+melted = returns.melt(var_name="Asset", value_name="Return")
+
+plt.figure(figsize=(14, 6))
+
+
+pt.half_violinplot(
+    x="Asset",
+    y="Return",
+    data=melted,
+    palette="tab10",
+    bw=.2,
+    cut=0.,
+    scale="area",
+    inner=None,
+    orient="v"
+)
+sns.boxplot(
+    data=melted,
+    x="Asset",
+    y="Return",
+    width=0.2,
+    palette="tab10",
+    showcaps=True,
+    flierprops = dict(marker='o', markerfacecolor='black', markersize=2, linestyle='none')
+    # showfliers=False
+)
+
+
+# 1. Horizontal Line at y=0 (Zero Return)
+plt.axhline(
+    y=0, 
+    color='black', 
+    linestyle='--', 
+    linewidth=0.8, 
+    alpha=0.7,
+    label='Zero Return' # Adding a label is good practice
+)
+
+# 2. Vertical Lines to separate Assets/Boxplots
+for i in range(9): # 10 - 1
+    plt.axvline(
+        x=i + 0.5, # Place the line exactly between asset i and asset i+1
+        color='gray', 
+        linestyle='-', 
+        linewidth=0.5, 
+        alpha=0.5
+    )
+
+
+plt.title("Violin + Boxplot of Asset Returns")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+```
+
+This violin and boxplots show the distribution of the companies’ returns and demonstrate that Firms such as First Solar, Vestas and Ameresco indicate a more spread distribution, showing higher risks, while TotalEnergies and Eni indicate more stable returns.
+
+## Correlation Analysis
+```{python}
+#| label: correlation_heatmap
+corr_matrix = returns.corr(method = 'pearson')
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", annot_kws={"size": 10})
+plt.title("Correlation Matrix of Returns")
+plt.tight_layout()
+```
+
+The correlation plot shows clearly the correlation that ENI, Exxon, Chevron, Shell, Equinor and TotalEnergies still have with each other, mainly due to their connection to the price of oil, while the rest do not really show strong correlations due to their businesses being overall diversified, so sector-specific changes did not impact them equally at the same time. Lastly, there is also no negative correlation to the oil giants; this might be a symptom of the overall difference in volatility experienced in the market.
+
+```{python}
+#| label: correlation_heatmap_difference
+plt.figure(figsize=(10, 8))
+sns.heatmap(returns.corr(method = 'spearman') - returns.corr(method = 'pearson'), annot=True, cmap='coolwarm', fmt=".2f", annot_kws={"size": 10})
+plt.title("Difference in correlation Matrix of Returns")
+```
+
+# Financial Metrics
+
+```{python}
+#| label: EPS_fundamentals_long
+PE_long  =  PE.set_index('Date').stack().reset_index().rename(columns = {"level_1":"Company", 0:"PE"})
+MKT_long = MKT.set_index('Date').stack().reset_index().rename(columns = {"level_1":"Company", 0:"MKT"})
+EPS_long = EPS.set_index('Date').stack().reset_index().rename(columns = {"level_1":"Company", 0:"EPS"})
+ROA_long = ROA.set_index('Date').stack().reset_index().rename(columns = {"level_1":"Company", 0:"ROA"})
+ROE_long = ROE.set_index('Date').stack().reset_index().rename(columns = {"level_1":"Company", 0:"ROE"})
+ESG_long = ESG.set_index('Date').stack().reset_index().rename(columns = {"level_1":"Company", 0:"ESG"})
+
+df_panel = pd.merge(PE_long,  MKT_long, on=['Date', 'Company'])
+df_panel = pd.merge(df_panel, EPS_long, on=['Date', 'Company'])
+GT(df_panel.sort_values(['Company']))
+```
+
+```{python}
+#| label: ROA_fundamentals_ratios
+df_panel_ratios = pd.merge(ROE_long, ROA_long, on=['Date', 'Company'])
+df_panel_ratios = pd.merge(df_panel_ratios, ESG_long, on=['Date', 'Company'])
+GT(df_panel_ratios)
+```
+
+## Scatter plots
+
+```{python}
+Quick_scatter(EPS, PE, "Earnings per share", "PE ratio")
+```
+
+The P/E and EPS are two ratios that are also connected in an inverse relation as .investors understand that this has been a difficult year for the sector and are betting on the results being better next year, increasing the P/E when the EPS is lower and vice versa, this is called the Molodovsky effect and although it is not present in all industries, in cyclical ones like the energy one it can be observed and used to explain such behaviour (Corporate Finance Institute 2024). This appears to be more present in the greener companies than in the oil companies, as they are seen as companies with more potential.
+
+
+```{python}
+#| label: scatter_no_groups
+Quick_scatter(PE, MKT, "PE ratio", "Market cap")
+```
+
+The relationship between Earnings per Share (EPS) and Market Capitalization is presented showing weak investor sentiment towards larger companies, usually smaller companies have more hype and expectations behind them like Vestas and Ameresco, which are the 2 smallest firms by market capitalisation, but show higher P/E compared to giants like Exxon that for their massive market capitalisation of 4.2 billion trades at a valuation lower than expected for its size, alongside Chevron these more established companies are in the later growth and are thus being priced for reality not for dreams.
+
+
+
+```{python}
+#| label: stacked_bar_chart
+def stacked_bar_chart(df, name):
+    quarters = ["Q4 2024", "Q1 2025", "Q2 2025", "Q3 2025"]
+    plot_df = df.transpose().iloc[-10:]
+    plot_df.columns = quarters
+    companies = plot_df.index.tolist()
+
+    # Convert all values to float
+    plot_df = plot_df.apply(pd.to_numeric, errors="coerce")
+
+    x = np.arange(len(quarters))
+
+    plt.figure(figsize=(14,7))
+
+    bottom = np.zeros(len(quarters), dtype=float)
+
+    for company in companies:
+    
+        values = plot_df.loc[company, quarters].values.astype(float)
+
+        plt.bar(
+            x,
+            values,
+            bottom=bottom,
+            label=company
+        )
+        bottom += values  # numeric safe
+
+    plt.xticks(x, quarters)
+    plt.xlabel("Quarter")
+    plt.ylabel(f"Total Value of {name} (Stacked)")
+    plt.title(f"Stacked Bar Chart of {name} (per Quarter)")
+    plt.legend(title="Company", loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
+    plt.tight_layout()
+    plt.show()
+
+
+stacked_bar_chart(MKT, "Market Capitalisation")
+```
+
+The stacked bar chart allows to see that the market overall did not expand that much over the last year; the overall market capitalisation of these firms increased only by 3.97% from 2024, mainly due to the hardships faced in the second quarter with tariffs and oil price pressure. 
+
+## ESG analysis 
+
+```{python}
+#| label: scatter_fundamentals_ESG
+MKT2 = MKT.iloc[3:,:]
+PE2 = PE.iloc[3:,:]
+EPS2 = EPS.iloc[3:,:]
+
+Quick_scatter(ROE, ESG, "Returns on Equity", "ESG score")
+Quick_scatter(ROA, ESG, "Returns on Assets", "ESG score")
+Quick_scatter(MKT2, ESG, "Market Capitalisation", "ESG score")
+```
+
+```{python}
+#| label: scatter_fundamentals_ESG_groups
+Quick_scatter(ROE, ESG, "Returns on Equity", "ESG score", panelreg = True)
+Quick_scatter(ROA, ESG, "Returns on Assets", "ESG score", panelreg = True)
+Quick_scatter(PE2, ESG, "Price Earnings", "ESG score", panelreg = True)
+Quick_scatter(EPS2, ESG, "Earnings per Share", "ESG score", panelreg = True)
+```
+
+When looking at the ESG score, the story is clear: the market still wants companies to move towards greener investments. Across our sample, clean companies are consistently associated with stronger financial performance. While ROA highlights the operational efficiency of the asset-heavy oil majors, the ROE is crucial for understanding the renewable firms, which rely heavily on equity financing for growth. Interestingly, firms with better sustainability profiles tended to outperform in both metrics, suggesting that the 'green premium' is supported by genuine operational efficiency and lower risk premia. This relationship extends to the EPS as well: companies with stronger ESG credentials typically command larger revenues over the last year. Overall, the evidence points to a positive correlation between ESG quality and both profitability and market perception in all but the P/E ratio, as higher ESG scores can signal higher costs and lower short-term profitability, which can pressure P/E ratios. Meanwhile, Oil companies show no correlation to any ESG variables, implying that investors and other market participants do not value them based on ESG. 
+
+# Conclusion
+This study provides empirical evidence of a structural divergence within the energy sector, driven by the ongoing global energy transition. The analysis of financial metrics and descriptive statistics confirms that the sector is split between established incumbents acting as defensive anchors and volatile disruptors representing speculative growth. These companies have stood the test of a rather difficult year and have also shown resilience, especially when it comes to the looming threat of tariffs and different kinds of market pressures that have impacted oil and gas in the last year, whether it is inflationary, geopolitical tensions, including armed conflicts and trade restrictions.
+The renewable segment exhibits higher probability of extreme events compared to the integrated oil majors. This volatility is further supported by Beta coefficients; firms such as Ameresco exceed market risk, while integrated Oil companies like Shell and Chevron act as defensive assets.
+The scatter plot analysis of fundamentals reveals a market preference for "growth potential" over "current value", with investors that appear willing to assign higher valuation multiples to firms despite lower or volatile earnings, banking on future growth. 
+Contrary to standard liquidity premiums, the analysis suggests that larger capitalised firms (i.e., Exxon, Shell) trade at lower P/E multiples. This indicates that the market prices these giants for "reality", discounting their mature growth profiles, while actively pricing smaller renewables for "dreams," with a hype premium.
+Finally, the ESG analysis highlights a maturing market rationality. There is a consistent positive correlation between ESG scores and profitability metrics. This suggests that sustainable practices are no longer just a compliance cost but are associated with operational efficiency. However, the lower P/E ratios often found in the highest ESG scorers imply that investors remain cautious about the capital intensity required for the transition, especially in the short term. 
+
+# References 
+Bohen, Tim. 2025. “FSLR Stock Surge: What’s Next?” Stockstotrade, August 15, 2025. https://stockstotrade.com/news/first-solar-inc-fslr-news-2025_08_15-2
+
+Corporate Finance Institute. 2024. “Molodovsky Effect.” Corporate Finance Institute, September 10, 2024. https://corporatefinanceinstitute.com/resources/career-map/sell-side/capital-markets/molodovsky-effect
+International Energy Agency. 2025. “Oil Market Report for April 2025,” April 2025. https://www.iea.org/reports/oil-market-report-april-2025.
+Omotosho, Kayode. 2025. “Why Ameresco (AMRC) Stock Is Trading Lower Today.” Yahoo Finance, February 28, 2025. https://finance.yahoo.com/news/why-ameresco-amrc-stock-trading-192128114.html.
+
+
+# Appendix
+```{python}
+Quick_scatter(ROE, PE2,  "ROE", "PE", panelreg = False, groupreg = False)
+# Horizontal and vertical thresholds
+x_thresh = 7    # ROE
+y_thresh = 30   # PE
+
+# Shade region: x < 10 (vertical span), y > 30 (horizontal span)
+plt.axvspan(xmin=plt.xlim()[0], xmax=x_thresh, ymin=y_thresh / plt.ylim()[1], ymax=1,
+color='red', alpha=0.15, label='Low ROE & High PE Region')
+
+x_thresh = 10   # ROE
+y_thresh = 15   # PE
+# Shade region: x < 10 (vertical span), y > 30 (horizontal span)
+plt.axvspan(xmin=plt.xlim()[0], xmax=x_thresh, ymin=y_thresh / plt.ylim()[1], ymax=1,
+color='red', alpha=0.15, label='Low ROE & High PE Region')
+```
+
+```{python}
+def Quick_scatter(Data1, Data2, label1, label2, ylog=False, xlog=False, panelreg = False, groupreg = True):
+        # Collect all data for panel regression
+    all_data1 = []
+    all_data2 = []
+    plt.figure(figsize=(8, 6))
+    
+    if groupreg:
+    # ---- classify companies ----
+        green_status = {
+            "CVX US Equity": "no",
+            "FSLR US Equity": "yes",
+            "ENI IM Equity": "some",
+            "XOM US Equity": "no",
+            "SHEL LN Equity": "no",
+            "VWS DC Equity": "yes",
+            "EQNR NO Equity": "some",
+            "TTE FP Equity": "some",
+            "AMRC US Equity": "yes",
+            "NEE US Equity": "yes"
+        }
+
+
+        # If you want: define green = yes only
+        green_companies = [c for c,s in green_status.items() if s == "yes"]
+        non_green_companies = [c for c,s in green_status.items() if s == "no"]
+        some_companies = [c for c,s in green_status.items() if s == "some"]  # optional
+
+
+        # Also prepare lists for green/non-green group regressions
+        green_x = []
+        green_y = []
+        nongreen_x = []
+        nongreen_y = []
+        some_x = []
+        some_y = []
+
+    # --- Plot scatter + company-level regressions ---
+    for company in company_columns:
+        Data1_series = Data1[company]
+        Data2_series = Data2[company]
+
+        all_data1.append(Data1_series)
+        all_data2.append(Data2_series)
+        if groupreg:
+            # Add to correct group
+            if company in green_companies:
+                green_x.append(Data1_series)
+                green_y.append(Data2_series)
+            elif company in non_green_companies:
+                nongreen_x.append(Data1_series)
+                nongreen_y.append(Data2_series)
+            elif company in some_companies:
+                some_x.append(Data1_series)
+                some_y.append(Data2_series)
+
+        # Company scatter
+        plt.scatter(Data1_series, Data2_series, label=company)
+
+        # Company individual regression
+        # sns.regplot(
+        #     x=Data1_series.values,
+        #     y=Data2_series.values,
+        #     scatter=False,
+        #     ci=None,
+        #     line_kws={'alpha': 0.6, 'linewidth': 1}
+        # )
+
+    # --- Convert group lists ---
+    if groupreg:
+        gx = pd.concat(green_x).values if green_x else None
+        gy = pd.concat(green_y).values if green_y else None
+        nx = pd.concat(nongreen_x).values if nongreen_x else None
+        ny = pd.concat(nongreen_y).values if nongreen_y else None
+        sx = pd.concat(some_x).values if some_x else None
+        sy = pd.concat(some_y).values if some_y else None
+
+    if panelreg:
+        # --- Panel-wide regression ---
+        all_x = pd.concat(all_data1).values
+        all_y = pd.concat(all_data2).values
+        sns.regplot(
+            x=all_x, y=all_y,
+            scatter=False, ci=None,
+            label='Panel-Wide Regression',
+            line_kws={'color': 'blue', 'linewidth': 4, 'alpha': 0.2}
+        )
+
+    if groupreg:
+        # --- Group Regressions ---
+        if gx is not None:
+            sns.regplot(
+                x=gx, y=gy,
+                scatter=False, ci=None,
+                label='Aligned Companies',
+                line_kws={'color': 'green', 'linewidth': 5, 'alpha': 0.2}
+            )
+
+        if nx is not None:
+            sns.regplot(
+                x=nx, y=ny,
+                scatter=False, ci=None,
+                label='Unprepared Companies',
+                line_kws={'color': 'red', 'linewidth': 5, 'alpha': 0.2}
+            )
+
+        if sx is not None:
+            sns.regplot(
+                x=sx, y=sy,
+                scatter=False, ci=None,
+                label='Developing Companies',
+                line_kws={'color': 'gray', 'linewidth': 5, 'alpha': 0.2}
+        )
+
+    # --- Formatting ---
+    if xlog:
+        plt.xscale('log')
+    if ylog:
+        plt.yscale('log')
+
+    plt.title(f'{label1} vs. {label2}', fontsize=14)
+    plt.xlabel(label1)
+    plt.ylabel(label2)
+    plt.grid(True, ls="--", alpha=0.6)
+    plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
+    plt.tight_layout()
+
+Quick_scatter(ROE, ESG, "Returns on Equity", "ESG score")
+Quick_scatter(ROA, ESG, "Returns on Assets", "ESG score")
+Quick_scatter(PE2, ESG, "Price Earnings", "ESG score")
+Quick_scatter(EPS2, ESG, "Earnings per Share", "ESG score")
+```
+
+```{python}
+#| include: false
+#| label: final_beep
+#| error: false
+try:
+    from beepy.beep import beep
+    beep(15)
+    print("Beep played successfully!")
+except Exception as e:
+    print(f"Beep failed: {e}")
+```
+
+```{python}
+#| label: rolling_analysis_separate
+import matplotlib.pyplot as plt
+# Assuming 'returns' DataFrame is already defined, and 'window' is set to 30
+
+window = 30
+rolling_mean = returns.rolling(window=window).mean()
+rolling_vol = returns.rolling(window=window).std()
+
+# --- Chart 1: Rolling Mean ---
+plt.figure(figsize=(12, 6))
+
+for col in returns.columns:
+    # Plotting each asset's rolling mean
+    plt.plot(rolling_mean.index, rolling_mean[col], linewidth=1.5, label=col)
+
+plt.title(f'{window}-Day Rolling Mean of Returns', fontsize=14)
+plt.xlabel('Date')
+plt.ylabel('Rolling Mean Return')
+plt.grid(True, linestyle='--', alpha=0.6)
+
+# Legend for Chart 1
+plt.legend(
+    title='Asset',
+    loc='center left',
+    bbox_to_anchor=(1.02, 0.5), # Moves the legend outside the plot area
+    frameon=False # Ensure a background for the legend for clarity
+)
+plt.tight_layout() # Adjust layout to make room for the legend
+plt.show()
+
+
+# --- Chart 2: Rolling Volatility ---
+plt.figure(figsize=(12, 6))
+
+for col in returns.columns:
+    # Plotting each asset's rolling volatility
+    plt.plot(rolling_vol.index, rolling_vol[col], linewidth=1.5, label=col)
+
+plt.title(f'{window}-Day Rolling Volatility (Standard Deviation)', fontsize=14)
+plt.xlabel('Date')
+plt.ylabel('Rolling Volatility (Std Dev)')
+plt.grid(True, linestyle='--', alpha=0.6)
+
+# Legend for Chart 2 (identical placement)
+plt.legend(
+    title='Asset',
+    loc='center left',
+    bbox_to_anchor=(1.02, 0.5),
+    frameon=False
+)
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| label: beta_barplot
+sorted_beta = beta_df.sort_values('Beta', ascending=False)
+mycolors = ['red' if v < 0 else 'steelblue' for v in sorted_beta['Beta']]
+ax = sorted_beta.plot(kind='bar', color=mycolors, legend=False, figsize=(9, 6))
+plt.axhline(1, color='red', linestyle='--', label='Market Beta = 1')
+plt.title('Market Beta per Company')
+plt.ylabel('Beta')
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+```
+
+```{python}
+#| label: Timeseries
+basic_plot(PE, "P/E ratio")
+basic_plot(MKT, "market capitalisation")
+basic_plot(EPS, "Earnings per share")
+# basic_plot(ROA, "return on assets")
+# basic_plot(ROE, "return on equity")
+# basic_plot(ESG, "Overall esg score")
+```
+
+
+```{python}
+#| label: clustered_bar_chart
+
+clustered_bar_chart(MKT, "Market Capitalisation")
+clustered_bar_chart(EPS, "Earnings Per Share")
+clustered_bar_chart(PE, "P/E Ratio")
+```
+
+
+## Scatter with groups
+
+
+```{python}
+#| label: Scatter_with_groups
+
+Quick_scatter(PE, MKT, "PE ratio", "Market cap", ylog = False, panelreg = True)
+Quick_scatter(EPS, MKT, "Earnings per share", "Market cap", ylog = False, panelreg = True)
+Quick_scatter(EPS, PE, "Earnings per share", "PE ratio", panelreg = True)
+Quick_scatter(ROE, ROA, "Returns on Equity", "Returns on Assets", panelreg = True)
+# Quick_scatter_1reg(ESG, PE, "ESG score", "PE ratio")
+# Quick_scatter_1reg(ESG, EPS, "ESG score", "Earnings per share")
+# Quick_scatter_1reg(ESG, ROE, "ESG score", "Returns on Equity")
+# Quick_scatter_1reg(ESG, ROA, "ESG score", "Returns on Assets")
+```
+
+```{python}
+Quick_scatter(EPS, MKT, "Earnings per share", "Market cap")
+Quick_scatter(ROE, ROA, "Returns on Equity", "Returns on Assets")
+```
+
+
+```{python}
+stacked_bar_chart(PE, "P/E Ratio")
+stacked_bar_chart(EPS, "Earnings Per Share")
+```
+
+```{python}
+#| label: share_stacked_bar_chart
+
+percentage_stacked_bar_chart(MKT, "Market Capitalisation")
+percentage_stacked_bar_chart(EPS, "Earnings Per Share")
+percentage_stacked_bar_chart(PE, "P/E Ratio")
+```
+
+
+```{python}
+Quick_scatter(MKT2, ESG, "Market Capitalisation", "ESG score", panelreg = True)
+```
+
+**Growth**
+```{python}
+#| label: fundamentals_growth
+basic_plot(EPS.iloc[:, 1:].div(EPS.iloc[0, 1:], axis=1), "Earnings per Share Growth")
+basic_plot(MKT.iloc[:, 1:].div(MKT.iloc[0, 1:], axis=1), "Market Capitalisation Growth")
+basic_plot(PE.iloc[:, 1:].div(PE.iloc[0, 1:], axis=1), "PE Growth")
+```
+
+```{python}
+#| label: simple_bar_chart
+
+simple_bar_chart(ROA, "Return on Assets (%)")
+simple_bar_chart(ROE, "Return on Equity (%)")
+simple_bar_chart(ESG, "ESG Scores")
+DIFF = (ROE.transpose().iloc[-10:] - ROA.transpose().iloc[-10:])
+simple_bar_chart(DIFF.transpose(), "ROE - ROA")
+```
+
